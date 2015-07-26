@@ -5,6 +5,7 @@ from collections import OrderedDict
 from datetime import datetime
 from imgurpython import ImgurClient
 from PIL import Image
+from praw.handlers import MultiprocessHandler
 import logger
 import matplotlib.pyplot as plt
 import numpy as np
@@ -95,7 +96,7 @@ def keyword_search(session, username_queue, run_event):
             if keyword in commentbody:
                 valid_name = re.compile(r'[T,t]rue[K,k]arma \/u\/([\w-]+)', re.UNICODE)
                 user_name = valid_name.findall(commentbody)[0]
-                if user_name not in username_queue:
+                if user_name not in username_queue.keys():
                     username_queue[user_name] = comment
                     log.info('Added {0} to queue, queue length = {1}'.format(user_name, len(username_queue)))
             time.sleep(0.0001)
@@ -113,42 +114,51 @@ def process_username(session, username_queue, run_event):
                     ts = get_user_ts(user_name)
                     img_fig = gen_image(ts, user_name)
                     log.info('Processed {0}'.format(user_name))
-                except:
+                except TypeError:
+                    log.info('No user data')
+                    continue
+                except praw.errors.NotFound as error:
                     log.info('{0} not found'.format(user_name))
                     continue
-                # img_fig.savefig('{0}.png'.format(user_name), format='png', dpi=600)
                 # Save to temporary file and upload
                 temp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+                log.debug('Temporary file name: {0}'.format(temp.name))
+                img_fig.savefig(temp.name, format='png', dpi=600)
+                temp.close()
                 try:
-                    log.debug('Temporary file name: {0}'.format(temp.name))
-                    img_fig.savefig(temp.name, format='png', dpi=600)
-                    temp.close()
                     uploaded_image = im.upload_from_path(temp.name, config={'title':'Cumulative TrueKarma for /u/{0}'.format(user_name)})
                     log.debug('Uploaded to {0}'.format(uploaded_image['link']))
-                    comment.reply('TrueKarma for /u/{user}:'
-                        ' '
-                        '  * Submissions: {sub}'
-                        '  * Comments: {com}'
-                        '  * Total: {tot}'
-                        '  * [Historical Graph]({link})'
-                        ' '
-                        '*****'
+                except:
+                    raise
+                finally:
+                    os.remove(temp.name)
+                try:
+                    comment.reply('TrueKarma for /u/{user}:\n\n'
+                        '  * Submissions: {sub}\n'
+                        '  * Comments: {com}\n'
+                        '  * Total: {tot}\n'
+                        '  * [Historical Graph]({link})\n\n'
+                        '*****\n'
                         '^(TrueKarma bot, summon with "TrueKarma /u)^\/UserName"'
                         ' '.format(user=user_name,
                                    sub=int(ts['sub_cum'].tail(1)),
                                    com=int(ts['com_cum'].tail(1)),
                                    tot=int(ts['tot_cum'].tail(1)),
                                    link=uploaded_image['link']))
-                    log.debug('Posted reply')
-                finally:
-                    os.remove(temp.name)
+                except praw.errors.RateLimitExceeded as error:
+                    log.warning('Hit rate limit... sleeping for {0} seconds'.format(error.sleep_time))
+                    time.sleep(error.sleep_time)
+                    continue
+                log.debug('Posted reply')
             time.sleep(0.1)
         else:
             break
 
 config = SafeConfigParser()
 config.read('config.ini')
-r = praw.Reddit(user_agent=config.get('reddit', 'user_agent'))
+handler = MultiprocessHandler()
+r = praw.Reddit(user_agent=config.get('reddit', 'user_agent'),
+                workonhandler=handler)
 r.login(config.get('reddit', 'username'),
         config.get('reddit', 'password'), disable_warning=True)
 im = ImgurClient(config.get('imgur', 'client_id'),
