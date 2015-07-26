@@ -158,7 +158,7 @@ config = SafeConfigParser()
 config.read('config.ini')
 handler = MultiprocessHandler()
 r = praw.Reddit(user_agent=config.get('reddit', 'user_agent'),
-                workonhandler=handler)
+                handler=handler)
 r.login(config.get('reddit', 'username'),
         config.get('reddit', 'password'), disable_warning=True)
 im = ImgurClient(config.get('imgur', 'client_id'),
