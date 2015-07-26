@@ -1,0 +1,7 @@
+*.pyc
+*.ipynb
+oauth.txt
+config.ini
+
+# Setup notes
+setup_notes.md
