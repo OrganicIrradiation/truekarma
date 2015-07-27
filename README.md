@@ -5,7 +5,7 @@ This is a [Reddit](http://reddit.com) bot that calculates a user's "true karma" 
 
 This bot:
 
- 1. Continuously searches the Reddit comment stream for the summoning phrase "TrueKarma /u/UserName"
+ 1. Continuously searches the Reddit comment stream for the summoning phrase "+/u/True-Karma UserName"
  2. Searches through the /u/UserName's history
  3. Calculates the cumulative scores for their submissions and comments
  4. Generates a small graphic and uploads it to imgur
