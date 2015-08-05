@@ -6,6 +6,8 @@ from datetime import datetime
 from imgurpython import ImgurClient
 from praw.handlers import MultiprocessHandler
 import logger
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -84,6 +86,8 @@ def gen_image(ts, username):
                 int(ts['com_cum'].tail(1)),
                 int(ts['tot_cum'].tail(1))),
                 fontsize=14, fontweight='bold')
+    plt.setp( ax1.xaxis.get_majorticklabels(), rotation=30 )
+    plt.setp( ax3.xaxis.get_majorticklabels(), rotation=30 )
 
     return fig
 
@@ -155,7 +159,7 @@ valid_name = re.compile(r'\+\/u\/[T,t]rue\-[K,k]arma ([\w-]+)', re.UNICODE)
 
 
 def main():
-
+    log.info('Main loop running')
     running = True
     while running:
         try:
@@ -179,7 +183,6 @@ def main():
                     pass
                 m.mark_as_read()
 
-            log.debug('Queue: {0}'.format(message_queue.keys()))
             process_message(r, message_queue)
 
         except KeyboardInterrupt:
