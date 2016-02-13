@@ -1,6 +1,6 @@
 *.pyc
 *.ipynb
-oauth.txt
+oauth.ini
 config.ini
 
 # Setup notes

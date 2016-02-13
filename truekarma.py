@@ -1,15 +1,14 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
-from ConfigParser import SafeConfigParser
 from collections import OrderedDict
 from datetime import datetime
 from imgurpython import ImgurClient
 from praw.handlers import MultiprocessHandler
+import configparser
 import logger
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import OAuth2Util
 import os
 import pandas as pd
 import praw
@@ -40,8 +39,12 @@ def get_user_ts(session, username):
     com_dt = [datetime.utcfromtimestamp(c.created_utc) for c in coms][::-1]
     com_score = [c.score for c in coms][::-1]
 
-    ts = pd.DataFrame({'sub': pd.Series(sub_score, index=sub_dt),
-                       'com': pd.Series(com_score, index=com_dt)})
+    sub_df = pd.DataFrame(sub_score, columns=['sub'], index=sub_dt)
+    com_df = pd.DataFrame(com_score, columns=['com'], index=com_dt)
+    sub_df.drop_duplicates(inplace=True)
+    com_df.drop_duplicates(inplace=True)
+    ts = pd.concat([sub_df, com_df], axis=1)
+    
     ts['sub_cum'] = [v for v in accumu(ts['sub'])]
     ts['com_cum'] = [v for v in accumu(ts['com'])]
     ts['tot_cum'] = ts['sub_cum']+ts['com_cum']
@@ -93,64 +96,70 @@ def gen_image(ts, username):
 
 
 def process_message(session, message_queue):
-    if message_queue:
-        [username, message] = message_queue.items()[0]
-        log.info('Processing /u/{0}'.format(username))
-        try:
-            ts = get_user_ts(session, username)
-            log.debug('Processed time series')
-        except TypeError:
-            log.info('No user data')
-            message_queue.popitem(last=False)
-            return
-        except praw.errors.InvalidUser:
-            log.info('/u/{0} does not exist'.format(username))
-            message_queue.popitem(last=False)
-            return
-        except praw.errors.NotFound:
-            log.info('/u/{0} not found'.format(username))
-            message_queue.popitem(last=False)
-            return
+    [username, message] = list(message_queue.items())[0]
+    log.info('Processing /u/{0}'.format(username))
+    try:
+        ts = get_user_ts(session, username)
+        log.debug('Processed time series')
+    except TypeError:
+        log.info('No user data')
+        return False
+    except praw.errors.InvalidUser:
+        log.info('/u/{0} does not exist'.format(username))
+        return False
+    except praw.errors.NotFound:
+        log.info('/u/{0} not found'.format(username))
+        return False
 
-        # Save to temporary file and upload
+    # Save to temporary file and upload
+    try:
         img_fig = gen_image(ts, username)
-        temp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-        img_fig.savefig(temp.name, format='png', dpi=600)
-        temp.close()
-        log.debug('Image generated, temp file name: {0}'.format(temp.name))
-        try:
-            uploaded_image = im.upload_from_path(temp.name, config={'title': 'Cumulative True Karma for /u/{0}'.format(username)})
-            log.debug('Uploaded to {0}'.format(uploaded_image['link']))
-        except:
-            raise
-        finally:
-            os.remove(temp.name)
-        try:
-            message.reply('True Karma for /u\/{user}:\n\n'
-                          '  * Submissions: {sub}\n'
-                          '  * Comments: {com}\n'
-                          '  * Total: {tot}\n'
-                          '  * [Historical Graph]({link})\n\n'
-                          '*****\n'
-                          '^(True Karma bot, summon with "+/u)^\/True-Karma ^UserName"'
-                          ''.format(user=username,
-                                    sub=int(ts['sub_cum'].tail(1)),
-                                    com=int(ts['com_cum'].tail(1)),
-                                    tot=int(ts['tot_cum'].tail(1)),
-                                    link=uploaded_image['link']))
-        except praw.errors.RateLimitExceeded:
-            raise
+    except TypeError:
+        log.info('/u/{0} history is empty'.format(username))
+        return False
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+    img_fig.savefig(temp.name, format='png', dpi=600)
+    temp.close()
+    log.debug('Image generated, temp file name: {0}'.format(temp.name))
+    try:
+        uploaded_image = im.upload_from_path(temp.name, config={'title': 'Cumulative True Karma for /u/{0}'.format(username)})
+        log.debug('Uploaded to {0}'.format(uploaded_image['link']))
+    except:
+        raise
+    finally:
+        os.remove(temp.name)
+    try:
+        message.reply('True Karma for /u\/{user}:\n\n'
+                      '  * Submissions: {sub}\n'
+                      '  * Comments: {com}\n'
+                      '  * Total: {tot}\n'
+                      '  * [Historical Graph]({link})\n\n'
+                      '*****\n'
+                      '^(True Karma bot, summon with "+/u)^\/True-Karma ^UserName"'
+                      ''.format(user=username,
+                                sub=int(ts['sub_cum'].tail(1)),
+                                com=int(ts['com_cum'].tail(1)),
+                                tot=int(ts['tot_cum'].tail(1)),
+                                link=uploaded_image['link']))
         log.debug('Posted reply')
-        message_queue.popitem(last=False)
+    except praw.errors.RateLimitExceeded:
+        raise
+    except APIException as error:
+        if str(error) == "(DELETED_COMMENT) `that comment has been deleted` on field `parent`":
+            log.warning('Comment was deleted before reply')
+            pass
+        else:
+            raise
+    return True
 
 
-config = SafeConfigParser()
+config = configparser.ConfigParser()
 config.read('config.ini')
-handler = MultiprocessHandler()
-r = praw.Reddit(user_agent=config.get('reddit', 'user_agent'),
-                handler=handler)
-r.login(config.get('reddit', 'username'),
-        config.get('reddit', 'password'), disable_warning=True)
+
+r = praw.Reddit(config.get('reddit', 'user_agent'))
+o = OAuth2Util.OAuth2Util(r)
+o.refresh(force=True)
+
 im = ImgurClient(config.get('imgur', 'client_id'),
                  config.get('imgur', 'client_secret'))
 log = logger.logger('truekarma', logger.DEBUG)
@@ -166,24 +175,22 @@ def main():
             messages = r.get_unread()
 
             for m in messages:
-                if m.subject != 'username mention':
-                    log.debug('Invalid summon command, no username mention')
-                    m.mark_as_read()
-                    continue
-
                 try:
-                    username = valid_name.findall(m.body)[0]
-                    if username not in message_queue.keys():
-                        message_queue[username] = m
-                        log.info('Added /u/{0} to queue, queue length = {1}'.format(username, len(message_queue)))
-                    else:
-                        log.debug('/u/{0} already in queue.'.format(username))
+                    for username in valid_name.findall(m.body)[:5]:
+                        if username not in message_queue.keys():
+                            message_queue[username] = m
+                            log.info('Added /u/{0} to queue, queue length = {1}'.format(username, len(message_queue)))
+                        else:
+                            log.debug('/u/{0} already in queue.'.format(username))
                 except:
                     log.debug('Invalid summon command, username problem')
                     pass
-                m.mark_as_read()
 
-            process_message(r, message_queue)
+            if message_queue:
+                success = process_message(r, message_queue)
+                [_, message] = list(message_queue.items())[0]
+                message.mark_as_read()
+                message_queue.popitem(last=False)
 
         except KeyboardInterrupt:
             log.warning("Received KeyboardInterrupt, shutting down...")
@@ -192,13 +199,14 @@ def main():
             log.warning('Rate limit exceeded, sleeping for {0} seconds...'.format(error.sleep_time))
             time.sleep(error.sleep_time)
             continue
-        except Exception as error:
-            log.error('Unhandled error: {0}'.format(error))
-            log.warning('Sleeping for {0} seconds...'.format(60))
-            time.sleep(60)
-            continue
+        # except Exception as error:
+        #     log.error('Unhandled error: {0}'.format(error))
+        #     log.warning('Sleeping for {0} seconds...'.format(60))
+        #     time.sleep(60)
+        #     continue
 
         time.sleep(15)
+
 
 if __name__ == '__main__':
     main()

@@ -1,0 +1,7 @@
+matplotlib
+imgurpython
+praw
+numpy
+pandas
+seaborn
+praw-OAuth2Util
